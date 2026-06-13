@@ -39,4 +39,5 @@ src-tauri/
 - `fetch_issues(site, email, jql) -> Vec<Issue>` — Issue엔 키/요약/마감/상태/우선순위/유형 외 `projectKey`·`projectName`·`parentSummary`도 포함(학교 칩용). 신규 검색 API는 `fields`에 `project`,`parent`를 명시해야 내려온다.
 - `save_token(email, token)` / `has_token(email) -> bool` / `delete_token(email)`
 - `set_badge(count)` — 트레이 툴팁에 미해결 건수 표시
+- `notify(title, body)` — 마감 알림 토스트. **OS별 분기**: Windows는 자체 AUMID(`appid::show_toast`, winrt)로 직접 발송, 비-Windows(macOS/Linux)는 `tauri-plugin-notification`(`NotificationExt::notification().builder()…show()`)으로 발송. 프론트는 `invoke("notify", {title, body})`만 호출하고 `AppHandle`은 Tauri가 자동 주입하므로, 커맨드에 `AppHandle` 인자를 추가해도 프론트 호출부는 그대로다. 플러그인 import(`use tauri_plugin_notification::NotificationExt;`)는 `#[cfg(not(windows))]` 블록 안에 두어 Windows 빌드에 unused 경고가 안 나게 한다.
 - 프론트→Rust 단방향 알림은 이벤트로: 트레이 메뉴가 `tray://refresh` / `tray://settings` emit, main.ts가 listen.
