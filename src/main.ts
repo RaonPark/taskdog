@@ -13,6 +13,12 @@ import {
   renderSettings,
   todayStr,
 } from "./render";
+import {
+  classifyError,
+  isRetryable,
+  RETRY_NOTICE,
+  RETRY_DELAY_MS,
+} from "./errors";
 
 const TOKEN_PAGE =
   "https://id.atlassian.com/manage-profile/security/api-tokens";
@@ -25,7 +31,12 @@ let settings: Settings;
 let issues: Issue[] = [];
 let mode: "list" | "settings" = "list";
 let refreshTimer: number | undefined;
+let refreshing = false; // 중복 요청/렌더 방지 (타이머·버튼·재시도 겹침 차단)
 const notifiedKeys = new Set<string>();
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 // ---------- 공통 동작 ----------
 
@@ -64,16 +75,39 @@ function stopTimer(): void {
 
 // ---------- 데이터 새로고침 ----------
 
+function fetchIssuesOnce(): Promise<Issue[]> {
+  return invoke<Issue[]>("fetch_issues", {
+    site: settings.site,
+    email: settings.email,
+    jql: settings.jql,
+  });
+}
+
 async function doRefresh(): Promise<void> {
+  if (refreshing) return; // 진행 중이면 중복 요청 무시
+  refreshing = true;
   mode = "list";
   renderLoading(content);
   setStatus("불러오는 중…");
   try {
-    issues = await invoke<Issue[]>("fetch_issues", {
-      site: settings.site,
-      email: settings.email,
-      jql: settings.jql,
-    });
+    let result: Issue[];
+    try {
+      result = await fetchIssuesOnce();
+    } catch (firstErr) {
+      // 1차 실패: 일시적(네트워크) 오류면 짧은 백오프 후 1회만 자동 재시도.
+      const cls = classifyError(firstErr);
+      if (!isRetryable(cls.kind)) throw firstErr;
+      console.warn(
+        `[fetch_issues] 1차 실패(${cls.kind}) — 재시도합니다:`,
+        cls.raw
+      );
+      renderLoading(content, RETRY_NOTICE);
+      setStatus("네트워크 오류 · 잠시 후 재시도");
+      await delay(RETRY_DELAY_MS);
+      result = await fetchIssuesOnce(); // 재시도 실패 시 아래 catch로
+    }
+
+    issues = result;
     renderList(content, issues);
     const now = new Date();
     const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(
@@ -85,12 +119,19 @@ async function doRefresh(): Promise<void> {
     void invoke("set_badge", { count: issues.length }).catch(() => {});
     void notifyDue(issues);
   } catch (e) {
-    const msg = typeof e === "string" ? e : String(e);
-    renderError(content, msg);
+    // 최종 실패: 분류해 사용자 친화 메시지만 표시하고, 원문은 콘솔에만 남긴다.
+    const cls = classifyError(e);
+    console.error(`[fetch_issues] 실패(${cls.kind}):`, cls.raw);
+    renderError(content, cls.userMessage, cls.kind);
     setStatus("오류");
     document
       .getElementById("error-settings")
       ?.addEventListener("click", () => void showSettingsMode());
+    document
+      .getElementById("error-retry")
+      ?.addEventListener("click", () => void doRefresh());
+  } finally {
+    refreshing = false;
   }
 }
 

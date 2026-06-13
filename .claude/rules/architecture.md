@@ -12,6 +12,7 @@ src/
   render.ts                 목록 렌더(지연/오늘/예정/마감없음 그룹, D-day·색상, 학교 칩 schoolLabel), 설정 폼, 로딩/에러/빈 상태
   settings.ts               tauri-plugin-store 래퍼 (loadSettings/saveSettings)
   types.ts                  Issue/Settings 타입 + DEFAULT_SETTINGS
+  errors.ts                 Jira 요청 실패 분류 계층(network/auth/jql/unknown) + 사용자 문구 + 재시도 정책(classifyError/isRetryable)
   styles.css                다크 위젯 테마
 src-tauri/
   src/lib.rs                플러그인 등록, 트레이(메뉴/좌클릭), set_badge, 커맨드 등록(run())
@@ -27,6 +28,14 @@ src-tauri/
 3. Rust `fetch_issues`가 keyring에서 토큰을 읽어 Jira REST 호출 → `Vec<Issue>`(camelCase) 반환.
 4. `render.ts`가 마감 기준 그룹핑/색상으로 표시. 행 클릭 → `openUrl(browseUrl)`.
    - **학교 칩**: `schoolLabel`이 `parentSummary`의 선행 `[PFO XXX]` 태그 → 프로젝트명(…대/대학교 토큰) → 프로젝트 키 순으로 학교를 추론(프론트 계산). MIMS 하위작업은 상위 제목에, SEHAN/SEWU 등 학교 전용 PFO 프로젝트는 프로젝트명에 학교가 있고, SANDBOX처럼 학교 토큰이 없으면 키(`SANDBOX`)로 표시.
+
+## 에러 처리 흐름 (F6)
+- `fetch_issues` 실패는 `doRefresh()`(main.ts)가 잡아 **`errors.ts`의 `classifyError`로 분류**한다: `network` / `auth` / `jql` / `unknown`.
+- **분류는 프론트에 둔다**(표시용 파생 규칙 불변식과 동일). Rust(`jira.rs`/`secrets.rs`)는 지금처럼 한국어 접두사 문자열 에러(`"네트워크 오류: …"`, `"인증 실패 (401)"`, `"JQL 오류 (400)"`, `"Jira 오류 (50x)"` 등)를 던지고, `errors.ts`가 그 접두사 + 범용 영어 키워드(`401/403`, `failed to fetch`, `timeout`, `5xx/429` 등)를 매칭해 분류한다.
+- **사용자에겐 분류된 친화 문구만**(`USER_MESSAGES`) 노출. **원문 에러는 `console`에만** 남긴다(`[fetch_issues] 실패(kind): raw`). `renderError(container, message, kind)`는 message에 원문을 넣지 않는다.
+- **자동 재시도 정책**: 일시적 실패(`isRetryable` → 현재 `network`만)일 때 **짧은 백오프(`RETRY_DELAY_MS`) 후 1회만** 재시도. 인증/JQL/기타는 재시도 실익이 없어 즉시 표시. `refreshing` 가드로 타이머·버튼·재시도가 겹쳐 중복 요청/렌더되는 것을 막는다.
+- `renderError`의 후속 버튼은 kind로 갈린다: `network` → `#error-retry`(다시 시도, `doRefresh` 재호출), 그 외 → `#error-settings`(설정 열기). main.ts가 존재하는 버튼만 배선한다.
+- `navigator.onLine`은 **보조 신호로만** 쓴다(분류가 unknown이고 오프라인일 때만 network로 승격). 단독 판단 기준 금지.
 
 ## 핵심 불변식 (깨면 안 됨)
 - **API 토큰은 절대 프론트(웹뷰)로 보내지 않는다.** 토큰은 Rust ↔ keyring 안에서만 다룬다. 프론트는 `site/email/jql`만 넘긴다.

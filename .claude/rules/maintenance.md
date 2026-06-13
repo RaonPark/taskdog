@@ -38,6 +38,25 @@ Tauri v2에서 플러그인 하나를 쓰려면 **네 곳**을 모두 맞춰야 
 - 페이징은 `nextPageToken` 방식. 현재는 `maxResults=100` 단일 페이지만 처리(내 미해결 작업은 보통 수십 건 이하). 100건 초과를 다뤄야 하면 `jira.rs`에 토큰 루프 추가.
 - 인증: `Authorization: Basic base64(email:token)`. 401=토큰/이메일 오류, 400=JQL 오류로 사용자 메시지 분기되어 있음.
 
+## ⚠️ 에러 처리 / 실패 UX 규칙 (F6 — 깨면 UX·디버깅 다 손해)
+요청 실패 UX는 `src/errors.ts`(분류·문구·재시도 정책) + `doRefresh()`(main.ts) + `renderError`(render.ts)에 모여 있다. 손댈 땐 아래를 지킨다.
+1. **원문 에러를 사용자에게 그대로 노출하지 말 것.** 화면엔 분류된 친화 문구만, 원문은 `console`에만.
+2. **network / auth / jql / unknown 4종으로 구분해 표시할 것.** 분류 키워드는 `errors.ts`의 `classifyKind`에 모아둔다.
+3. **자동 재시도는 명시적 횟수 제한.** 현재 정책 = 일시적 실패 1회만(무한 재시도 금지). 백오프는 `RETRY_DELAY_MS`.
+4. **재시도 실익이 낮은 오류(auth/JQL)는 재시도 대상에서 제외**가 현재 정책(`isRetryable` → network만). 정책 변경은 UX·중복요청 영향 검토 후 사용자 확인.
+5. **Rust↔프론트 에러 포맷을 바꿀 땐 호출부 영향 범위를 먼저 확인할 것.** 분류는 Rust 에러 문자열(한국어 접두사)에 의존한다 → `jira.rs`/`secrets.rs`의 에러 문구를 바꾸면 `errors.ts`의 매칭도 **반드시 함께** 갱신(특히 `"네트워크 오류"`, `"인증 실패"`, `"JQL 오류"`, 상태코드 표기).
+6. **UX 개선이라도 기존 데이터 흐름·상태(`issues`/`mode`/`refreshing`/타이머)·Jira 요청 로직을 크게 바꾸지 말 것.** `refreshing` 가드는 중복 요청/렌더 방지용이니 우회하지 말 것.
+7. **큰 구조 변경(예: 구조화 에러 도입)은 사용자에게 먼저 물을 것.** ↓ 아래 권장안 참고.
+8. **사용자용 메시지와 개발자용 로그를 분리할 것.** `USER_MESSAGES`(사용자) vs `console`(raw)로 이미 분리돼 있다.
+9. 재시도 횟수/백오프를 늘리려면 중복 요청·과도한 Jira 호출(레이트리밋) 위험을 함께 검토.
+
+### 권장: 장기적으로는 Rust 구조화 에러 고려 (지금은 보류)
+현재는 **Rust가 문자열 에러를 던지고 프론트가 문자열 매칭으로 분류**한다. 영향 범위가 작아 F6에선 이 방식이 적절(오버엔지니어링 회피). 다만 한계가 있다:
+- 분류가 Rust 문구·상태코드 표기에 **암묵적으로 결합** → 문구를 바꾸면 프론트 매칭이 조용히 깨질 수 있다(테스트로 방어 중).
+- 다국어/문구 변경에 취약.
+
+장기적으로 실패 종류가 늘거나 분류가 더 정밀해져야 하면 `fetch_issues`를 **`Result<Vec<Issue>, JiraError>`** 로 바꾸고 `#[derive(Serialize)] struct JiraError { kind: "network"|"auth"|"jql"|..., message, detail }` 형태로 던지는 편이 견고하다. 이때 `kind`는 Rust가 권위 있게 정하고 프론트는 매칭 대신 `kind`만 읽는다. **단 영향 범위가 커지므로**(커맨드 반환 타입 변경, invoke catch가 string이 아닌 객체를 받게 됨, 모든 에러 경로 수정) **사용자 확인 후 별도 작업으로** 진행한다.
+
 ## 환경 메모
 - **rustup/cargo PATH**: rustup 설치 후 `%USERPROFILE%\.cargo\bin`이 PATH에 추가되지만, 이미 떠 있던 셸/IDE에는 반영 안 됨 → 새 터미널 또는 IDE 재시작 필요. 임시: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"`.
 - **TLS**: `reqwest`는 기본 features(Windows에서 schannel/native-tls) 사용 → OpenSSL 빌드 불필요.
