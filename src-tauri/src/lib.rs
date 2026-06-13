@@ -21,18 +21,25 @@ fn set_badge(app: AppHandle, count: i64) -> Result<(), String> {
     Ok(())
 }
 
-/// 마감 알림 토스트. Windows에선 우리 AUMID("TaskDog")로 직접 발송한다
-/// (플러그인은 설치본에서만 AUMID를 붙여 dev/target 실행 시 PowerShell로 폴백되므로).
+/// 마감 알림 토스트. Windows에선 우리 AUMID("TaskDog")로 직접 발송하고
+/// (플러그인은 설치본에서만 AUMID를 붙여 dev/target 실행 시 PowerShell로 폴백되므로),
+/// macOS/Linux에선 이미 등록된 tauri-plugin-notification으로 발송한다.
 #[tauri::command]
-fn notify(title: String, body: String) -> Result<(), String> {
+fn notify(app: AppHandle, title: String, body: String) -> Result<(), String> {
     #[cfg(windows)]
     {
+        let _ = &app;
         appid::show_toast(&title, &body)
     }
     #[cfg(not(windows))]
     {
-        let _ = (&title, &body);
-        Ok(())
+        use tauri_plugin_notification::NotificationExt;
+        app.notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show()
+            .map_err(|e| e.to_string())
     }
 }
 
