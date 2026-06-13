@@ -12,8 +12,14 @@ assignee = currentUser() and resolution = Unresolved ORDER BY due ASC, updated D
 ## 1. 처음 시작하기
 
 ### 1-1. 실행
-- 개발/테스트용으로 바로 실행: `src-tauri/target/debug/jira-today-todo.exe`
-- 정식 설치본을 만들려면 → [4. 빌드](#4-빌드).
+빌드 산출물 위치·실행 방법은 OS마다 다릅니다. 빌드 방법은 → [4. 빌드](#4-빌드).
+
+- **macOS**: 빌드하면 `src-tauri/target/release/bundle/macos/TaskDog.app` 이 생깁니다.
+  - 더블클릭하거나 터미널에서 `open src-tauri/target/release/bundle/macos/TaskDog.app`
+  - 평소 쓰려면 이 `TaskDog.app` 을 **`/Applications`(응용 프로그램) 폴더로 드래그**해 설치 → Launchpad/Spotlight에서 실행.
+  - 함께 생기는 `…/bundle/dmg/TaskDog_*.dmg` 는 배포용 디스크 이미지(열어서 앱을 응용 프로그램으로 드래그).
+  - 첫 실행 시 Gatekeeper 경고가 뜨면 → [5. 문제 해결](#5-문제-해결)의 "확인되지 않은 개발자" 항목 참고.
+- **Windows**: `src-tauri/target/release/jira-today-todo.exe`(단독 실행) 또는 설치본 `_setup.exe`.
 
 ### 1-2. 최초 설정
 앱을 처음 켜면 **설정 화면**이 나옵니다.
@@ -30,7 +36,7 @@ assignee = currentUser() and resolution = Unresolved ORDER BY due ASC, updated D
 **API 토큰 발급:** 설정 화면의 *"토큰 발급 페이지 열기 ↗"* 클릭 → Atlassian 페이지에서 *Create API token* → 생성된 토큰 복사 → 설정의 API 토큰 칸에 붙여넣기.
 (직접 링크: https://id.atlassian.com/manage-profile/security/api-tokens )
 
-**저장**을 누르면 목록이 나타납니다. 토큰은 파일이 아니라 **Windows 자격 증명 관리자**에 안전하게 저장되며, 이후엔 다시 입력할 필요가 없습니다.
+**저장**을 누르면 목록이 나타납니다. 토큰은 파일이 아니라 OS 자격 증명 저장소(**macOS = 키체인 / Windows = 자격 증명 관리자**)에 안전하게 저장되며, 이후엔 다시 입력할 필요가 없습니다.
 
 ---
 
@@ -60,9 +66,10 @@ assignee = currentUser() and resolution = Unresolved ORDER BY due ASC, updated D
 
 ### 알림
 마감이 지났거나 오늘 마감인 미해결 작업이 있으면 **데스크톱 알림**이 뜹니다(앱 실행 세션당 작업별 1회). 처음 한 번 알림 권한 허용이 필요할 수 있습니다.
+> ⚠️ **현재 마감 알림 토스트는 Windows에서만 발송됩니다.** macOS에서는 목록의 색상/D-day 표시로만 마감을 확인하세요(트레이 툴팁의 미해결 건수는 macOS에서도 동작). macOS 알림이 필요하면 알려주세요 — 알림 플러그인으로 연결할 수 있습니다.
 
-### 트레이
-시스템 트레이(작업표시줄 오른쪽 아이콘 모음)에 아이콘이 상주합니다.
+### 트레이 / 메뉴 막대
+**macOS는 화면 상단 메뉴 막대 오른쪽**, **Windows는 작업표시줄 오른쪽 트레이**에 아이콘이 상주합니다.
 - **좌클릭**: 창 표시/숨김 토글
 - **우클릭 메뉴**: 열기/숨기기 · 새로고침 · 설정 · 종료
 - 아이콘에 마우스를 올리면 **미해결 건수**가 툴팁으로 보입니다.
@@ -86,24 +93,44 @@ assignee = currentUser() and resolution = Unresolved ORDER BY due ASC, updated D
 
 ## 4. 빌드
 
-빌드는 터미널 명령으로 합니다. IntelliJ에서는 하단 **Terminal 탭(`Alt+F12`)** 에서 실행하세요.
+### 4-0. 사전 준비(처음 한 번)
+빌드에는 **Node/pnpm + Rust 툴체인**이 필요합니다.
 
+**macOS**
+1. **Xcode Command Line Tools**(컴파일러/링커):
+   ```bash
+   xcode-select --install        # 이미 있으면 "already installed" 라고 나옴
+   ```
+2. **Rust(rustup)** — 공식 설치 스크립트(권장):
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+   source "$HOME/.cargo/env"     # 또는 터미널 새로 열기
+   rustc --version               # 설치 확인
+   ```
+   (Homebrew를 선호하면 `brew install rustup` → `rustup-init` 도 가능)
+3. **Node 22+ / pnpm 10+** — 이미 설치돼 있으면 생략. pnpm은 `corepack enable pnpm` 또는 `brew install pnpm`.
+
+**Windows**: `winget install Rustlang.Rustup` + Visual Studio **MSVC C++ Build Tools**("Desktop development with C++"). cargo가 인식 안 되면 새 터미널/IDE로 다시 열기.
+
+### 4-1. 빌드 명령(공통)
 ```bash
-pnpm install          # 최초 1회 (의존성 설치)
-pnpm tauri dev        # 개발 모드(코드 수정 즉시 반영)
-pnpm tauri build      # 배포용 빌드(최적화 exe + 설치본)
+pnpm install          # 최초 1회 (JS 의존성 설치)
+pnpm tauri dev        # 개발 모드(코드 수정 즉시 반영, HMR)
+pnpm tauri build      # 배포용 빌드(최적화 + 설치 번들)
 ```
+> 첫 빌드는 Rust 의존성 컴파일로 **수 분** 걸립니다(이후엔 증분 빌드라 빨라짐).
 
-**`pnpm tauri build` 산출물** — `src-tauri/target/release/`:
+### 4-2. 산출물 — `src-tauri/target/release/`
+**macOS** (Apple Silicon 기준):
+- `bundle/macos/TaskDog.app` — 실행하는 앱(이 파일을 `/Applications`로 드래그해 설치)
+- `bundle/dmg/TaskDog_0.1.0_aarch64.dmg` — 배포용 디스크 이미지
+- 컴파일만 빠르게 확인: `pnpm tauri build --no-bundle` → 원시 바이너리 `src-tauri/target/release/jira-today-todo`
+
+**Windows**:
 - `jira-today-todo.exe` — 단독 실행 파일
 - `bundle/nsis/..._setup.exe` — 설치 마법사(시작 메뉴 등록)
 - `bundle/msi/....msi` — MSI 설치본
-
-> - exe만 원하면: `pnpm tauri build --no-bundle`
-> - 설치 마법사만: `pnpm tauri build --bundles nsis`
-> - 첫 빌드는 번들러 다운로드 + 최적화 컴파일로 **수 분** 걸립니다(이후 빨라짐).
-
-설치본(`_setup.exe`)을 실행하면 일반 프로그램처럼 설치되고 시작 메뉴에 등록됩니다.
+- exe만: `--no-bundle` / 설치 마법사만: `--bundles nsis`
 
 ---
 
@@ -111,26 +138,26 @@ pnpm tauri build      # 배포용 빌드(최적화 exe + 설치본)
 
 | 증상 | 해결 |
 |---|---|
-| **창이 안 보임** | 트레이 아이콘 좌클릭, 또는 단축키(`Ctrl+Alt+J`). 최소화돼 있을 수 있음 |
+| **창이 안 보임** | 트레이/메뉴 막대 아이콘 좌클릭, 또는 단축키(`Ctrl+Alt+J`, macOS도 동일 액셀러레이터). 최소화돼 있을 수 있음 |
+| **(macOS) "확인되지 않은 개발자" / "손상되어 열 수 없음"** | 서명/공증 안 된 앱이라 Gatekeeper가 막는 것. **앱을 우클릭(또는 Control+클릭) → 열기 → 열기**. 또는 *시스템 설정 → 개인정보 보호 및 보안* 맨 아래 **"확인 없이 열기"**. 그래도 막히면 터미널에서 `xattr -dr com.apple.quarantine "/Applications/TaskDog.app"` |
 | **"인증 실패 (401)"** | 이메일 또는 API 토큰 오류 → ⚙에서 토큰 재입력. 토큰이 만료/삭제됐을 수 있음 |
 | **"JQL 오류 (400)"** | JQL 문법 확인. Jira에서 먼저 검색해 보고 동작하는 JQL을 붙여넣기 |
 | **"404 / 사이트 URL 확인"** | 사이트 URL이 `https://<도메인>.atlassian.net` 형식인지 확인 |
-| **단축키가 안 먹음** | 다른 프로그램과 충돌 → ⚙에서 다른 조합으로 변경 |
-| **빌드 시 `cargo`/`tauri` not found** | rustup 설치 후 PATH 미반영. IntelliJ/터미널을 껐다 켜기. 임시: `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"` |
-| **알림이 안 옴** | Windows 설정 → 알림에서 이 앱(또는 PowerShell/앱 이름) 알림 허용 확인 |
+| **단축키가 안 먹음** | 다른 프로그램과 충돌 → ⚙에서 다른 조합으로 변경. macOS는 *시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용/입력 모니터링* 권한이 필요할 수 있음 |
+| **빌드 시 `cargo`/`tauri` not found** | rustup 설치 후 PATH 미반영. **macOS**: `source "$HOME/.cargo/env"` 또는 터미널 새로 열기. **Windows**: 임시 `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"` |
+| **마감 알림이 안 옴** | **macOS는 현재 마감 토스트 미지원**(목록 색상/D-day로 확인). **Windows**는 설정 → 알림에서 앱 알림 허용 확인 |
 
 ---
 
 ## 6. 데이터 · 보안
 
-- **API 토큰**: Windows 자격 증명 관리자에 저장(서비스명 `jira-today-todo`). 코드·설정 파일에 평문 저장되지 않습니다.
-- **설정**(사이트/이메일/JQL/주기/단축키): 앱 데이터 폴더의 `settings.json`(비밀 아님).
+- **API 토큰**: OS 자격 증명 저장소에 저장(서비스명 `jira-today-todo`). **macOS = 키체인(키체인 접근.app에서 `jira-today-todo` 검색), Windows = 자격 증명 관리자.** 코드·설정 파일에 평문 저장되지 않습니다.
+- **설정**(사이트/이메일/JQL/주기/단축키): 앱 데이터 폴더의 `settings.json`(비밀 아님). macOS는 `~/Library/Application Support/com.syworks.jiratodaytodo/`.
 - Jira 호출은 앱 내부(Rust)에서만 이루어지며 토큰이 화면(웹뷰)에 노출되지 않습니다.
 
 ---
 
 ## 7. 제거
 
-- 설치본으로 설치한 경우: Windows *설정 → 앱*에서 제거.
-- 단독 exe만 쓴 경우: 파일 삭제.
-- 저장된 토큰까지 지우려면: *자격 증명 관리자 → Windows 자격 증명*에서 `jira-today-todo` 항목 삭제.
+- **macOS**: `/Applications`(또는 둔 위치)의 `TaskDog.app`을 휴지통으로. 설정 폴더 `~/Library/Application Support/com.syworks.jiratodaytodo/` 삭제. 토큰은 *키체인 접근.app*에서 `jira-today-todo` 항목 삭제.
+- **Windows**: 설치본은 *설정 → 앱*에서 제거. 단독 exe는 파일 삭제. 토큰은 *자격 증명 관리자 → Windows 자격 증명*에서 `jira-today-todo` 삭제.

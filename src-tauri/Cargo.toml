@@ -24,13 +24,19 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["json"] }
 base64 = "0.22"
-keyring = { version = "3", features = ["windows-native"] }
+# 자격 증명 저장 백엔드는 OS별로 켠다(Cargo는 동일 크레이트의 feature를 타깃별로 합집합).
+# Windows=windows-native(자격 증명 관리자), macOS=apple-native(키체인).
+keyring = "3"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-window-state = "2"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }   # macOS 키체인 백엔드
+
 [target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }  # 자격 증명 관리자 백엔드
 winreg = "0.55"                    # AppUserModelId DisplayName/IconUri 레지스트리 등록
 tauri-winrt-notification = "0.7"   # 플러그인 우회해 우리 AUMID로 토스트 직접 발송
 windows = { version = "0.61", features = [
