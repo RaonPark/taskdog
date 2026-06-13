@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TaskDog</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <div id="app">
+      <header class="titlebar" data-tauri-drag-region>
+        <span class="title" data-tauri-drag-region>🐶 TaskDog</span>
+        <div class="actions">
+          <button id="btn-pin" class="icon-btn" title="항상 위 고정 (핀)">📌</button>
+          <button id="btn-refresh" class="icon-btn" title="새로고침">⟳</button>
+          <button id="btn-settings" class="icon-btn" title="설정">⚙</button>
+          <button id="btn-min" class="icon-btn" title="최소화">—</button>
+          <button id="btn-close" class="icon-btn" title="트레이로 숨기기">✕</button>
+        </div>
+      </header>
+      <main id="content"></main>
+      <footer id="statusbar"></footer>
+    </div>
+  </body>
+</html>
