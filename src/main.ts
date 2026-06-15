@@ -6,6 +6,7 @@ import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 
 import { Issue, Settings } from "./types";
 import { loadSettings, saveSettings } from "./settings";
+import { resolveMerges } from "./gitlab";
 import {
   renderList,
   renderLoading,
@@ -32,6 +33,7 @@ let issues: Issue[] = [];
 let mode: "list" | "settings" = "list";
 let refreshTimer: number | undefined;
 let refreshing = false; // 중복 요청/렌더 방지 (타이머·버튼·재시도 겹침 차단)
+let resolvingMerge = false; // GitLab 머지 확인 중복 실행 방지
 const notifiedKeys = new Set<string>();
 
 function delay(ms: number): Promise<void> {
@@ -118,6 +120,8 @@ async function doRefresh(): Promise<void> {
     );
     void invoke("set_badge", { count: issues.length }).catch(() => {});
     void notifyDue(issues);
+    // GitLab MR 머지 확인은 목록 표시와 분리(비동기·실패 격리). 끝나면 머지완료 칩만 덧입혀 재렌더.
+    void resolveAndRenderMerges(issues);
   } catch (e) {
     // 최종 실패: 분류해 사용자 친화 메시지만 표시하고, 원문은 콘솔에만 남긴다.
     const cls = classifyError(e);
@@ -162,6 +166,24 @@ async function notifyDue(list: Issue[]): Promise<void> {
   for (const i of due) notifiedKeys.add(i.key);
 }
 
+// GitLab MR 머지 상태를 확인해 머지완료 칩을 덧입힌다. 목록 렌더 이후 비동기로 돌며
+// 실패해도(네트워크/토큰/개별 MR) Jira 목록 표시엔 영향이 없다(요구 #10 — 실패 격리).
+async function resolveAndRenderMerges(list: Issue[]): Promise<void> {
+  if (resolvingMerge) return;
+  resolvingMerge = true;
+  try {
+    const map = await resolveMerges(list, settings);
+    // 그 사이 설정 화면으로 갔거나 목록이 갱신됐으면 재렌더하지 않는다(동일 데이터일 때만).
+    if (mode === "list" && issues === list && map.size > 0) {
+      renderList(content, issues, map);
+    }
+  } catch (e) {
+    console.warn("[gitlab] 머지 상태 확인 실패:", e);
+  } finally {
+    resolvingMerge = false;
+  }
+}
+
 // ---------- 설정 화면 ----------
 
 async function showSettingsMode(): Promise<void> {
@@ -172,7 +194,12 @@ async function showSettingsMode(): Promise<void> {
         () => false
       )
     : false;
-  renderSettings(content, settings, hasToken);
+  const hasGitlabToken = settings.gitlabBaseUrl
+    ? await invoke<boolean>("has_gitlab_token", {
+        baseUrl: settings.gitlabBaseUrl,
+      }).catch(() => false)
+    : false;
+  renderSettings(content, settings, hasToken, hasGitlabToken);
   setStatus("설정");
   wireSettingsForm(hasToken);
 }
@@ -199,6 +226,9 @@ function wireSettingsForm(hasToken: boolean): void {
     e.preventDefault();
     errBox.textContent = "";
     const data = new FormData(form);
+    const gitlabBaseUrl = String(data.get("gitlabBaseUrl") || "")
+      .trim()
+      .replace(/\/+$/, "");
     const next: Settings = {
       site: String(data.get("site") || "")
         .trim()
@@ -208,8 +238,10 @@ function wireSettingsForm(hasToken: boolean): void {
       refreshMinutes: Math.max(1, Number(data.get("refreshMinutes")) || 5),
       shortcut: String(data.get("shortcut") || "").trim(),
       alwaysOnTop: settings.alwaysOnTop,
+      gitlabBaseUrl,
     };
     const token = String(data.get("token") || "");
+    const gitlabToken = String(data.get("gitlabToken") || "");
 
     try {
       if (token) {
@@ -225,6 +257,15 @@ function wireSettingsForm(hasToken: boolean): void {
           errBox.textContent = "API 토큰을 입력하세요.";
           return;
         }
+      }
+
+      // GitLab 토큰: base URL과 토큰을 함께 입력했을 때만 keyring에 저장(base URL 키).
+      // base URL이 비면 GitLab 머지 확인은 비활성이므로 토큰도 저장하지 않는다.
+      if (gitlabBaseUrl && gitlabToken) {
+        await invoke("save_gitlab_token", {
+          baseUrl: gitlabBaseUrl,
+          token: gitlabToken,
+        });
       }
 
       await saveSettings(next);

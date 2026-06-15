@@ -1,4 +1,4 @@
-import { Issue, Settings } from "./types";
+import { Issue, MergeEnv, Settings } from "./types";
 import { ErrorKind } from "./errors";
 
 function escapeHtml(s: string): string {
@@ -77,7 +77,7 @@ const GROUP_META: Record<Bucket, { title: string; cls: string }> = {
   none: { title: "마감 없음", cls: "g-none" },
 };
 
-function issueRow(issue: Issue): string {
+function issueRow(issue: Issue, mergeEnvs?: MergeEnv[]): string {
   const days = daysUntil(issue.duedate);
   const bucket = bucketOf(days);
   const done = issue.statusCategory === "done";
@@ -95,6 +95,13 @@ function issueRow(issue: Issue): string {
     .filter((l) => (issue.labels || []).includes(l))
     .map((l) => `<span class="review-chip ${REVIEW_LABELS[l]}">${escapeHtml(l)}</span>`)
     .join("");
+  // GitLab MR 머지완료 칩(DEV/PROD). gitlab.ts가 채워준 환경 목록을 칩으로 표시.
+  const mergeChips = (mergeEnvs || [])
+    .map(
+      (env) =>
+        `<span class="merge-chip merge-${env.toLowerCase()}">${env} 머지완료</span>`
+    )
+    .join("");
   return `
     <div class="issue${done ? " done" : ""}" data-url="${escapeHtml(issue.browseUrl)}" title="${escapeHtml(issue.key)} · ${escapeHtml(issue.summary)}">
       <div class="issue-top">
@@ -110,12 +117,17 @@ function issueRow(issue: Issue): string {
         <span class="status-chip s-${escapeHtml(issue.statusCategory || "new")}">${escapeHtml(issue.status || "")}</span>
         ${issue.priority ? `<span class="prio">${escapeHtml(issue.priority)}</span>` : ""}
         ${reviewChips}
+        ${mergeChips}
         ${issue.duedate ? `<span class="due-text">📅 ${escapeHtml(issue.duedate)}</span>` : ""}
       </div>
     </div>`;
 }
 
-export function renderList(container: HTMLElement, issues: Issue[]): void {
+export function renderList(
+  container: HTMLElement,
+  issues: Issue[],
+  mergeMap?: Map<string, MergeEnv[]>
+): void {
   if (issues.length === 0) {
     container.innerHTML = `<div class="empty">🎉 미해결 작업이 없습니다.</div>`;
     return;
@@ -139,7 +151,7 @@ export function renderList(container: HTMLElement, issues: Issue[]): void {
     const meta = GROUP_META[b];
     html += `<section class="group ${meta.cls}">
       <h2 class="group-title">${meta.title}<span class="group-count">${list.length}</span></h2>
-      ${list.map(issueRow).join("")}
+      ${list.map((i) => issueRow(i, mergeMap?.get(i.key))).join("")}
     </section>`;
   }
   container.innerHTML = html;
@@ -169,7 +181,12 @@ export function renderError(
     </div>`;
 }
 
-export function renderSettings(container: HTMLElement, settings: Settings, hasToken: boolean): void {
+export function renderSettings(
+  container: HTMLElement,
+  settings: Settings,
+  hasToken: boolean,
+  hasGitlabToken: boolean
+): void {
   container.innerHTML = `
     <form id="settings-form" class="settings">
       <label>Jira 사이트 URL
@@ -184,6 +201,12 @@ export function renderSettings(container: HTMLElement, settings: Settings, hasTo
       </label>
       <label>JQL
         <textarea name="jql" rows="3" required>${escapeHtml(settings.jql)}</textarea>
+      </label>
+      <label>GitLab base URL <span class="hint">(선택 · 설정 시 MR 머지완료 칩·알림 · 토큰 필요)</span>
+        <input name="gitlabBaseUrl" type="url" value="${escapeHtml(settings.gitlabBaseUrl)}" placeholder="https://gitlab.example.com" />
+      </label>
+      <label>GitLab 토큰 ${hasGitlabToken ? '<span class="hint">(저장됨 · 변경 시에만 입력)</span>' : '<span class="hint">(칩·알림 표시에 필수)</span>'}
+        <input name="gitlabToken" type="password" placeholder="${hasGitlabToken ? "•••••••• (그대로 두면 유지)" : "GitLab Personal Access Token"}" autocomplete="off" />
       </label>
       <div class="settings-row">
         <label class="small">새로고침(분)

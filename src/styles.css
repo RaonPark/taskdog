@@ -288,6 +288,25 @@ body {
   color: var(--upcoming);
 }
 
+/* GitLab MR 머지완료 칩 */
+.merge-chip {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+.merge-chip.merge-dev {
+  /* DEV 머지완료 — 블루 */
+  background: rgba(76, 141, 255, 0.18);
+  color: var(--accent);
+}
+.merge-chip.merge-prod {
+  /* PROD 머지완료 — 그린 */
+  background: rgba(58, 165, 107, 0.22);
+  color: var(--upcoming);
+}
+
 .due-text {
   font-size: 10px;
   color: var(--text-dim);
