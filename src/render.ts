@@ -1,4 +1,5 @@
 import { Issue, Settings } from "./types";
+import { ErrorKind } from "./errors";
 
 function escapeHtml(s: string): string {
   return s
@@ -144,16 +145,27 @@ export function renderList(container: HTMLElement, issues: Issue[]): void {
   container.innerHTML = html;
 }
 
-export function renderLoading(container: HTMLElement): void {
-  container.innerHTML = `<div class="loading">불러오는 중…</div>`;
+export function renderLoading(container: HTMLElement, message = "불러오는 중…"): void {
+  container.innerHTML = `<div class="loading">${escapeHtml(message)}</div>`;
 }
 
-export function renderError(container: HTMLElement, message: string): void {
+// 분류된 사용자 친화 메시지만 받는다(원문 에러 금지 — 그건 콘솔로). kind에 따라
+// 후속 액션 버튼이 달라진다: network는 "다시 시도", 그 외(auth/jql/unknown)는 "설정 열기".
+// 버튼 배선은 main.ts가 #error-retry / #error-settings 존재 여부로 처리한다.
+export function renderError(
+  container: HTMLElement,
+  message: string,
+  kind: ErrorKind = "unknown"
+): void {
+  const action =
+    kind === "network"
+      ? `<button id="error-retry" class="btn">다시 시도</button>`
+      : `<button id="error-settings" class="btn">설정 열기</button>`;
   container.innerHTML = `
     <div class="error">
       <div class="error-title">⚠ 불러오지 못했습니다</div>
       <div class="error-msg">${escapeHtml(message)}</div>
-      <button id="error-settings" class="btn">설정 열기</button>
+      ${action}
     </div>`;
 }
 
