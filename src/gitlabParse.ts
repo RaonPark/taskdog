@@ -1,9 +1,9 @@
 // GitLab 관련 순수 로직(파싱·판정). Tauri/스토어 등 런타임 의존이 없어 단위 테스트가 쉽다.
 // (오케스트레이션/IPC/저장은 gitlab.ts가 담당.) MergeEnv는 타입만 가져온다(런타임 import 없음).
-import type { MergeEnv } from "./types";
+import type { MergeEnv, MergeChipKind } from "./types";
 
 // target_branch → 머지 환경 매핑. 사용자 확정값: dev→DEV, prod→PROD.
-// 둘 중 어느 것도 아니면 null(머지완료 태그도, 알림도 표시하지 않음 — 안전 기본값).
+// 둘 중 어느 것도 아니면 null(머지완료/머지오픈 칩도, 알림도 표시하지 않음 — 안전 기본값).
 // 매핑 규칙을 바꾸려면 이 표만 수정하면 된다(브랜치 매핑을 코드 곳곳에 박지 않는다).
 export const BRANCH_ENV: Record<string, MergeEnv> = {
   dev: "DEV",
@@ -12,6 +12,26 @@ export const BRANCH_ENV: Record<string, MergeEnv> = {
 
 export function branchToEnv(targetBranch: string): MergeEnv | null {
   return BRANCH_ENV[targetBranch] ?? null;
+}
+
+// GitLab MR state → 칩 종류. GitLab state 값: opened | merged | closed | locked.
+//   merged → "머지완료" 칩, opened → "머지오픈" 칩, 그 외(closed/locked/미상) → null(칩 없음).
+// closed 미표시는 사용자 확정값(요구 §2/§4 안전 기본값).
+export function chipKindOf(state: string): MergeChipKind | null {
+  if (state === "merged") return "merged";
+  if (state === "opened") return "open";
+  return null;
+}
+
+// 칩 클릭으로 열어도 되는 URL인가: http/https만 허용한다.
+// javascript:/data:/file: 등 위험 scheme과 파싱 불가 문자열은 모두 거부(요구 — URL 안전성).
+export function isSafeMrUrl(url: string): boolean {
+  try {
+    const proto = new URL(url).protocol;
+    return proto === "http:" || proto === "https:";
+  } catch {
+    return false;
+  }
 }
 
 export interface ParsedMr {

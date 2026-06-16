@@ -7,6 +7,8 @@ import {
   parseMrUri,
   originOf,
   branchToEnv,
+  chipKindOf,
+  isSafeMrUrl,
   sameUser,
   shouldNotify,
 } from "../src/gitlabParse.ts";
@@ -55,6 +57,30 @@ test("branchToEnv: dev→DEV, prod→PROD, 그 외 null", () => {
   assert.equal(branchToEnv("main"), null);
   assert.equal(branchToEnv("develop"), null);
   assert.equal(branchToEnv(""), null);
+});
+
+test("chipKindOf: merged→merged, opened→open, 그 외(closed/locked/미상)→null", () => {
+  assert.equal(chipKindOf("merged"), "merged");
+  assert.equal(chipKindOf("opened"), "open");
+  assert.equal(chipKindOf("closed"), null); // 사용자 확정: closed 미표시
+  assert.equal(chipKindOf("locked"), null);
+  assert.equal(chipKindOf(""), null);
+});
+
+test("isSafeMrUrl: http/https만 허용, 위험 scheme 차단", () => {
+  assert.equal(
+    isSafeMrUrl("https://gitlab.example.com/g/p/-/merge_requests/1"),
+    true
+  );
+  assert.equal(
+    isSafeMrUrl("http://gitlab.example.com/g/p/-/merge_requests/1"),
+    true
+  );
+  assert.equal(isSafeMrUrl("javascript:alert(1)"), false);
+  assert.equal(isSafeMrUrl("data:text/html,<b>x</b>"), false);
+  assert.equal(isSafeMrUrl("file:///etc/passwd"), false);
+  assert.equal(isSafeMrUrl(""), false);
+  assert.equal(isSafeMrUrl("not a url"), false);
 });
 
 test("sameUser: id 우선, 그다음 username, 그다음 name", () => {

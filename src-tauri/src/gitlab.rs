@@ -136,12 +136,15 @@ struct RawMrListItem {
 #[serde(rename_all = "camelCase")]
 pub struct SearchedMr {
     iid: i64,
+    // GitLab MR 상태: opened | merged | closed | locked. 칩 분류는 프론트가 한다(머지오픈/머지완료).
+    state: String,
     merged: bool,
     target_branch: String,
     web_url: String,
 }
 
-/// 한 프로젝트에서 이슈 키를 title/description에 포함하는 머지된 MR을 검색한다.
+/// 한 프로젝트에서 이슈 키를 title/description에 포함하는 MR을 **상태 무관**(state=all)으로
+/// 검색한다. 프론트가 state로 칩을 분류한다(merged→머지완료, opened→머지오픈, 그 외→칩 없음).
 /// base_url 토큰은 keyring(base URL 키)에서 읽으며, project_path는 프론트가
 /// dev-status MR url에서 추출해(설정 호스트와 일치할 때만) 넘긴다(토큰 유출 방지).
 /// 페이징은 단일 페이지(per_page=100). 한 이슈가 100개 초과 MR을 갖는 일은 사실상 없다.
@@ -162,7 +165,8 @@ pub async fn search_project_mrs(
         .query(&[
             ("search", key.as_str()),
             ("in", "title,description"),
-            ("state", "merged"),
+            // 상태 무관(머지오픈 칩을 위해 opened도 받는다). 분류는 프론트(chipKindOf).
+            ("state", "all"),
             ("scope", "all"),
             ("per_page", "100"),
         ])
@@ -188,11 +192,15 @@ pub async fn search_project_mrs(
 
     Ok(raw
         .into_iter()
-        .map(|m| SearchedMr {
-            iid: m.iid,
-            merged: m.state.as_deref() == Some("merged"),
-            target_branch: m.target_branch.unwrap_or_default(),
-            web_url: m.web_url.unwrap_or_default(),
+        .map(|m| {
+            let state = m.state.unwrap_or_default();
+            SearchedMr {
+                iid: m.iid,
+                merged: state == "merged",
+                state,
+                target_branch: m.target_branch.unwrap_or_default(),
+                web_url: m.web_url.unwrap_or_default(),
+            }
         })
         .collect())
 }
@@ -216,5 +224,21 @@ mod tests {
     fn urlencode_path_encodes_special() {
         assert_eq!(urlencode_path("a b"), "a%20b");
         assert_eq!(urlencode_path("x@y"), "x%40y");
+    }
+
+    #[test]
+    fn searched_mr_reads_state_field() {
+        // search는 이제 모든 상태(state=all)를 받는다. state 필드가 역직렬화되고
+        // merged 플래그는 state=="merged"에서만 참인지 확인(opened/closed는 거짓).
+        let json = r#"[
+            {"iid":204,"state":"merged","target_branch":"dev","web_url":"https://g/x/-/merge_requests/204"},
+            {"iid":205,"state":"opened","target_branch":"prod","web_url":"https://g/x/-/merge_requests/205"},
+            {"iid":206,"state":"closed","target_branch":"dev","web_url":"https://g/x/-/merge_requests/206"}
+        ]"#;
+        let raw: Vec<RawMrListItem> = serde_json::from_str(json).unwrap();
+        assert_eq!(raw.len(), 3);
+        assert_eq!(raw[0].state.as_deref(), Some("merged"));
+        assert_eq!(raw[1].state.as_deref(), Some("opened"));
+        assert_eq!(raw[2].state.as_deref(), Some("closed"));
     }
 }

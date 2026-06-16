@@ -7,6 +7,7 @@ import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { Issue, Settings } from "./types";
 import { loadSettings, saveSettings } from "./settings";
 import { resolveMerges } from "./gitlab";
+import { isSafeMrUrl } from "./gitlabParse";
 import {
   renderList,
   renderLoading,
@@ -323,13 +324,38 @@ function wireTitlebar(): void {
 
 function wireContentDelegation(): void {
   content.addEventListener("click", (e) => {
-    const target = (e.target as HTMLElement).closest(
-      ".issue"
+    const el = e.target as HTMLElement;
+    // GitLab MR 칩 클릭 → 해당 MR 열기. 이슈 카드(Jira) 열기로는 내려가지 않게 먼저 처리.
+    const chip = el.closest(
+      ".merge-chip[data-mr-url]"
     ) as HTMLElement | null;
-    if (!target) return;
-    const url = target.getAttribute("data-url");
+    if (chip) {
+      openMrFromChip(chip);
+      return;
+    }
+    const issue = el.closest(".issue") as HTMLElement | null;
+    if (!issue) return;
+    const url = issue.getAttribute("data-url");
     if (url) void openUrl(url);
   });
+
+  // 키보드 접근성: 칩에 Tab 포커스 후 Enter/Space로 MR 열기.
+  content.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const chip = (e.target as HTMLElement).closest(
+      ".merge-chip[data-mr-url]"
+    ) as HTMLElement | null;
+    if (!chip) return;
+    e.preventDefault();
+    openMrFromChip(chip);
+  });
+}
+
+// 칩의 data-mr-url을 안전성 재검사(http/https만) 후 외부 브라우저로 연다.
+// URL은 GitLab API의 web_url(권위 있는 값)이며, 위험 scheme은 여기서도 한 번 더 막는다.
+function openMrFromChip(chip: HTMLElement): void {
+  const mrUrl = chip.getAttribute("data-mr-url");
+  if (mrUrl && isSafeMrUrl(mrUrl)) void openUrl(mrUrl);
 }
 
 async function setupWindowEvents(): Promise<void> {

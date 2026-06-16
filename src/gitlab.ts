@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Issue, MergeEnv, Settings } from "./types";
+import { Issue, MergeEnv, MergeChip, MergeChipKind, Settings } from "./types";
 import {
   loadMrStates,
   saveMrState,
@@ -11,6 +11,7 @@ import {
   parseMrUri,
   originOf,
   branchToEnv,
+  chipKindOf,
   shouldNotify,
   GitlabMrResp,
 } from "./gitlabParse";
@@ -23,9 +24,10 @@ interface DevMr {
   authorName: string | null;
 }
 
-// Rust gitlab::search_project_mrs 반환형(camelCase).
+// Rust gitlab::search_project_mrs 반환형(camelCase). state=all로 모든 상태가 내려온다.
 interface SearchedMr {
   iid: number;
+  state: string; // opened | merged | closed | locked
   merged: boolean;
   targetBranch: string;
   webUrl: string;
@@ -35,17 +37,31 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+// 칩 표시 순서: 머지완료 먼저, 그 안에서 DEV→PROD. (화면에 항상 같은 순서로 나오게)
+const ENV_ORDER: Record<MergeEnv, number> = { DEV: 0, PROD: 1 };
+const KIND_ORDER: Record<MergeChipKind, number> = { merged: 0, open: 1 };
+
+function sortChips(chips: MergeChip[]): MergeChip[] {
+  return chips.sort(
+    (a, b) =>
+      KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
+      ENV_ORDER[a.env] - ENV_ORDER[b.env]
+  );
+}
+
 /**
- * 이슈별 GitLab MR 머지 상태를 확인해, 이슈별 머지완료 환경 목록(칩용)을 돌려준다.
+ * 이슈별 GitLab MR 상태를 확인해, 이슈별 칩 목록(머지완료/머지오픈)을 돌려준다.
  *
  * **하이브리드 발견**(dev-status 단독으론 승격 MR을 못 잡는 한계 때문):
  *  1. dev-status(개발 패널)로 이슈에 연결된 MR의 **프로젝트 경로만** 발견(기존 Jira 토큰).
  *     dev-status는 MR↔이슈를 source 브랜치명/커밋으로만 연결 → `local`→`dev`→`prod`
  *     승격 MR(브랜치명에 키 없음)은 누락되지만, 적어도 프로젝트는 알 수 있다.
- *  2. 그 프로젝트에서 **GitLab MR 검색**(`search_project_mrs`, title/description 인덱스)으로
- *     이슈 키를 포함하는 머지 MR을 전수 수집 → 승격 MR(dev/prod)까지 포착.
- *  3. 칩: `status==merged` + target 브랜치(→dev/prod). 환경별(DEV/PROD) 최대 1칩.
- *  4. 알림: 머지 MR url로 GitLab API(fetch_gitlab_mr)를 1회 호출해 author≠merged_by일 때만 발송.
+ *  2. 그 프로젝트에서 **GitLab MR 검색**(`search_project_mrs`, title/description 인덱스, state=all)으로
+ *     이슈 키를 포함하는 MR을 전수 수집 → 승격 MR(dev/prod)까지 포착.
+ *  3. 칩: target 브랜치(→dev/prod) × 상태(merged→머지완료 / opened→머지오픈). 환경·상태별 1칩
+ *     (가장 최근 iid의 MR url을 칩이 들고 가서 클릭 시 연다). closed/locked 등은 칩 없음.
+ *  4. 알림: **merged MR만** url로 GitLab API(fetch_gitlab_mr)를 1회 호출해 author≠merged_by일 때만 발송.
+ *     open MR은 칩만 표시하고 절대 알림하지 않는다(불변식).
  *
  *  - 칩·알림 모두 GitLab base URL+토큰 설정이 **필수**다(검색에 토큰 필요). 미설정이면 빈 맵.
  *  - 호스트 일치할 때만 호출(토큰 유출 방지) — 프로젝트 경로는 설정 호스트와 일치하는
@@ -56,8 +72,8 @@ function nowIso(): string {
 export async function resolveMerges(
   issues: Issue[],
   settings: Settings
-): Promise<Map<string, MergeEnv[]>> {
-  const result = new Map<string, MergeEnv[]>();
+): Promise<Map<string, MergeChip[]>> {
+  const result = new Map<string, MergeChip[]>();
 
   // GitLab 미설정/토큰 없음이면 칩 발견 자체가 불가(검색에 토큰 필요) → 빈 맵.
   const configOrigin = originOf(settings.gitlabBaseUrl);
@@ -89,9 +105,9 @@ export async function resolveMerges(
     }
     if (projectPaths.length === 0) continue;
 
-    // 2) 각 프로젝트에서 키로 MR 검색 → 머지 MR을 환경 칩으로.
-    const envs: MergeEnv[] = [];
-    const seenEnv = new Set<MergeEnv>();
+    // 2) 각 프로젝트에서 키로 MR 검색 → 환경·상태별 1칩으로 집계.
+    //    같은 (환경,상태) 조합이 여러 MR이면 가장 최근(max iid) MR의 url을 칩이 들고 간다.
+    const best = new Map<string, { chip: MergeChip; iid: number }>(); // key `${env}|${kind}`
     for (const projectPath of projectPaths) {
       let mrs: SearchedMr[];
       try {
@@ -106,22 +122,31 @@ export async function resolveMerges(
       }
 
       for (const mr of mrs) {
-        if (!mr.merged) continue;
         const env = branchToEnv(mr.targetBranch);
         if (!env) continue; // dev/prod 외 브랜치(local 등)는 칩·알림 없음
+        const kind = chipKindOf(mr.state);
+        if (!kind) continue; // closed/locked 등은 칩 없음(사용자 확정)
 
-        // 칩: 환경별 1회.
-        if (!seenEnv.has(env)) {
-          seenEnv.add(env);
-          envs.push(env);
+        // 칩: 환경·상태별 1개, 가장 최근 MR url을 보관.
+        const k = `${env}|${kind}`;
+        const prev = best.get(k);
+        if (!prev || mr.iid > prev.iid) {
+          best.set(k, { chip: { env, kind, url: mr.webUrl }, iid: mr.iid });
         }
 
-        // 알림(선택): merged_by 확인이 필요해 GitLab API를 1회만 호출.
-        await maybeNotify(issue, projectPath, mr, env, states, ctx);
+        // 알림은 merged MR만(open은 알림 없음 — 불변식). merged_by 확인에 GitLab API 1회.
+        if (kind === "merged") {
+          await maybeNotify(issue, projectPath, mr, env, states, ctx);
+        }
       }
     }
 
-    if (envs.length) result.set(issue.key, envs);
+    if (best.size) {
+      result.set(
+        issue.key,
+        sortChips([...best.values()].map((b) => b.chip))
+      );
+    }
   }
 
   // 이번이 baseline 패스였다면, 다음부턴 정상 알림하도록 플래그를 세운다.

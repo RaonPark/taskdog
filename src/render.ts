@@ -1,4 +1,5 @@
-import { Issue, MergeEnv, Settings } from "./types";
+import { Issue, MergeChip, Settings } from "./types";
+import { isSafeMrUrl } from "./gitlabParse";
 import { ErrorKind } from "./errors";
 
 function escapeHtml(s: string): string {
@@ -77,7 +78,7 @@ const GROUP_META: Record<Bucket, { title: string; cls: string }> = {
   none: { title: "마감 없음", cls: "g-none" },
 };
 
-function issueRow(issue: Issue, mergeEnvs?: MergeEnv[]): string {
+function issueRow(issue: Issue, chips?: MergeChip[]): string {
   const days = daysUntil(issue.duedate);
   const bucket = bucketOf(days);
   const done = issue.statusCategory === "done";
@@ -95,12 +96,19 @@ function issueRow(issue: Issue, mergeEnvs?: MergeEnv[]): string {
     .filter((l) => (issue.labels || []).includes(l))
     .map((l) => `<span class="review-chip ${REVIEW_LABELS[l]}">${escapeHtml(l)}</span>`)
     .join("");
-  // GitLab MR 머지완료 칩(DEV/PROD). gitlab.ts가 채워준 환경 목록을 칩으로 표시.
-  const mergeChips = (mergeEnvs || [])
-    .map(
-      (env) =>
-        `<span class="merge-chip merge-${env.toLowerCase()}">${env} 머지완료</span>`
-    )
+  // GitLab MR 칩(DEV/PROD × 머지완료/머지오픈). gitlab.ts가 채워준 칩 목록을 표시.
+  // url이 있고 안전(http/https)하면 클릭 가능: data-mr-url + role/tabindex/aria(접근성).
+  // 클릭 처리는 main.ts의 #content 위임 핸들러가 한다(이슈 카드 열기와 분리).
+  const mergeChips = (chips || [])
+    .map((c) => {
+      const label = `${c.env} ${c.kind === "merged" ? "머지완료" : "머지오픈"}`;
+      const openCls = c.kind === "open" ? " merge-open" : "";
+      const clickable = !!c.url && isSafeMrUrl(c.url);
+      const attrs = clickable
+        ? ` data-mr-url="${escapeHtml(c.url)}" role="link" tabindex="0" aria-label="${escapeHtml(label)} — GitLab MR 열기" title="${escapeHtml(label)} · 클릭하면 GitLab MR 열기"`
+        : ` title="${escapeHtml(label)}"`;
+      return `<span class="merge-chip merge-${c.env.toLowerCase()}${openCls}"${attrs}>${escapeHtml(label)}</span>`;
+    })
     .join("");
   return `
     <div class="issue${done ? " done" : ""}" data-url="${escapeHtml(issue.browseUrl)}" title="${escapeHtml(issue.key)} · ${escapeHtml(issue.summary)}">
@@ -126,7 +134,7 @@ function issueRow(issue: Issue, mergeEnvs?: MergeEnv[]): string {
 export function renderList(
   container: HTMLElement,
   issues: Issue[],
-  mergeMap?: Map<string, MergeEnv[]>
+  mergeMap?: Map<string, MergeChip[]>
 ): void {
   if (issues.length === 0) {
     container.innerHTML = `<div class="empty">🎉 미해결 작업이 없습니다.</div>`;

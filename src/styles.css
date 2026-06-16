@@ -288,7 +288,7 @@ body {
   color: var(--upcoming);
 }
 
-/* GitLab MR 머지완료 칩 */
+/* GitLab MR 칩 (머지완료 = 채워진 칩 / 머지오픈 = 같은 환경색의 점선 테두리) */
 .merge-chip {
   font-size: 10px;
   font-weight: 700;
@@ -297,14 +297,33 @@ body {
   white-space: nowrap;
 }
 .merge-chip.merge-dev {
-  /* DEV 머지완료 — 블루 */
+  /* DEV — 블루 */
   background: rgba(76, 141, 255, 0.18);
   color: var(--accent);
 }
 .merge-chip.merge-prod {
-  /* PROD 머지완료 — 그린 */
+  /* PROD — 그린 */
   background: rgba(58, 165, 107, 0.22);
   color: var(--upcoming);
+}
+/* 머지오픈 — 환경색은 유지하되 비워진(점선) 형태로 "아직 머지 전"을 구분 */
+.merge-chip.merge-dev.merge-open,
+.merge-chip.merge-prod.merge-open {
+  background: transparent;
+  border: 1px dashed currentColor;
+  padding: 0 6px;
+}
+/* 클릭 가능한 MR 칩(URL 보유): 커서/호버/포커스 표시 */
+.merge-chip[data-mr-url] {
+  cursor: pointer;
+}
+.merge-chip[data-mr-url]:hover {
+  filter: brightness(1.18);
+  text-decoration: underline;
+}
+.merge-chip[data-mr-url]:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .due-text {
