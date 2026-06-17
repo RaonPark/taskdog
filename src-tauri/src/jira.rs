@@ -13,6 +13,8 @@ struct SearchResponse {
 
 #[derive(Deserialize)]
 struct RawIssue {
+    // 숫자 issueId (예: "59689"). Jira dev-status(개발 패널) API가 키가 아닌 이 id를 요구한다.
+    id: String,
     key: String,
     fields: Fields,
 }
@@ -72,6 +74,7 @@ struct NamedIcon {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Issue {
+    id: String,
     key: String,
     summary: String,
     duedate: Option<String>,
@@ -163,6 +166,7 @@ pub async fn fetch_issues(
             let parent_summary = f.parent.and_then(|p| p.fields.summary);
             Issue {
                 browse_url: format!("{site}/browse/{}", ri.key),
+                id: ri.id,
                 key: ri.key,
                 summary: f.summary.unwrap_or_default(),
                 duedate: f.duedate,

@@ -1,4 +1,5 @@
-import { Issue, Settings } from "./types";
+import { Issue, MergeChip, Settings } from "./types";
+import { isSafeMrUrl } from "./gitlabParse";
 import { ErrorKind } from "./errors";
 
 function escapeHtml(s: string): string {
@@ -77,7 +78,7 @@ const GROUP_META: Record<Bucket, { title: string; cls: string }> = {
   none: { title: "마감 없음", cls: "g-none" },
 };
 
-function issueRow(issue: Issue): string {
+function issueRow(issue: Issue, chips?: MergeChip[]): string {
   const days = daysUntil(issue.duedate);
   const bucket = bucketOf(days);
   const done = issue.statusCategory === "done";
@@ -95,6 +96,20 @@ function issueRow(issue: Issue): string {
     .filter((l) => (issue.labels || []).includes(l))
     .map((l) => `<span class="review-chip ${REVIEW_LABELS[l]}">${escapeHtml(l)}</span>`)
     .join("");
+  // GitLab MR 칩(DEV/PROD × 머지완료/머지오픈). gitlab.ts가 채워준 칩 목록을 표시.
+  // url이 있고 안전(http/https)하면 클릭 가능: data-mr-url + role/tabindex/aria(접근성).
+  // 클릭 처리는 main.ts의 #content 위임 핸들러가 한다(이슈 카드 열기와 분리).
+  const mergeChips = (chips || [])
+    .map((c) => {
+      const label = `${c.env} ${c.kind === "merged" ? "머지완료" : "머지오픈"}`;
+      const openCls = c.kind === "open" ? " merge-open" : "";
+      const clickable = !!c.url && isSafeMrUrl(c.url);
+      const attrs = clickable
+        ? ` data-mr-url="${escapeHtml(c.url)}" role="link" tabindex="0" aria-label="${escapeHtml(label)} — GitLab MR 열기" title="${escapeHtml(label)} · 클릭하면 GitLab MR 열기"`
+        : ` title="${escapeHtml(label)}"`;
+      return `<span class="merge-chip merge-${c.env.toLowerCase()}${openCls}"${attrs}>${escapeHtml(label)}</span>`;
+    })
+    .join("");
   return `
     <div class="issue${done ? " done" : ""}" data-url="${escapeHtml(issue.browseUrl)}" title="${escapeHtml(issue.key)} · ${escapeHtml(issue.summary)}">
       <div class="issue-top">
@@ -110,12 +125,17 @@ function issueRow(issue: Issue): string {
         <span class="status-chip s-${escapeHtml(issue.statusCategory || "new")}">${escapeHtml(issue.status || "")}</span>
         ${issue.priority ? `<span class="prio">${escapeHtml(issue.priority)}</span>` : ""}
         ${reviewChips}
+        ${mergeChips}
         ${issue.duedate ? `<span class="due-text">📅 ${escapeHtml(issue.duedate)}</span>` : ""}
       </div>
     </div>`;
 }
 
-export function renderList(container: HTMLElement, issues: Issue[]): void {
+export function renderList(
+  container: HTMLElement,
+  issues: Issue[],
+  mergeMap?: Map<string, MergeChip[]>
+): void {
   if (issues.length === 0) {
     container.innerHTML = `<div class="empty">🎉 미해결 작업이 없습니다.</div>`;
     return;
@@ -139,7 +159,7 @@ export function renderList(container: HTMLElement, issues: Issue[]): void {
     const meta = GROUP_META[b];
     html += `<section class="group ${meta.cls}">
       <h2 class="group-title">${meta.title}<span class="group-count">${list.length}</span></h2>
-      ${list.map(issueRow).join("")}
+      ${list.map((i) => issueRow(i, mergeMap?.get(i.key))).join("")}
     </section>`;
   }
   container.innerHTML = html;
@@ -169,7 +189,12 @@ export function renderError(
     </div>`;
 }
 
-export function renderSettings(container: HTMLElement, settings: Settings, hasToken: boolean): void {
+export function renderSettings(
+  container: HTMLElement,
+  settings: Settings,
+  hasToken: boolean,
+  hasGitlabToken: boolean
+): void {
   container.innerHTML = `
     <form id="settings-form" class="settings">
       <label>Jira 사이트 URL
@@ -184,6 +209,12 @@ export function renderSettings(container: HTMLElement, settings: Settings, hasTo
       </label>
       <label>JQL
         <textarea name="jql" rows="3" required>${escapeHtml(settings.jql)}</textarea>
+      </label>
+      <label>GitLab base URL <span class="hint">(선택 · 설정 시 MR 머지완료 칩·알림 · 토큰 필요)</span>
+        <input name="gitlabBaseUrl" type="url" value="${escapeHtml(settings.gitlabBaseUrl)}" placeholder="https://gitlab.example.com" />
+      </label>
+      <label>GitLab 토큰 ${hasGitlabToken ? '<span class="hint">(저장됨 · 변경 시에만 입력)</span>' : '<span class="hint">(칩·알림 표시에 필수)</span>'}
+        <input name="gitlabToken" type="password" placeholder="${hasGitlabToken ? "•••••••• (그대로 두면 유지)" : "GitLab Personal Access Token"}" autocomplete="off" />
       </label>
       <div class="settings-row">
         <label class="small">새로고침(분)

@@ -13,11 +13,16 @@ src/
   settings.ts               tauri-plugin-store 래퍼 (loadSettings/saveSettings)
   types.ts                  Issue/Settings 타입 + DEFAULT_SETTINGS
   errors.ts                 Jira 요청 실패 분류 계층(network/auth/jql/unknown) + 사용자 문구 + 재시도 정책(classifyError/isRetryable)
-  styles.css                다크 위젯 테마
+  gitlab.ts                 MR 칩(머지완료/머지오픈)/알림 오케스트레이션(resolveMerges: dev-status로 프로젝트 발견 → GitLab 검색(state=all)으로 MR 수집 → 환경·상태별 칩(클릭용 web_url 포함)+알림). 첫 실행 baseline 시딩
+  gitlabParse.ts            GitLab 순수 로직(런타임 의존 없음·단위테스트 대상): parseMrUri/originOf/branchToEnv(BRANCH_ENV)/chipKindOf/isSafeMrUrl/sameUser/shouldNotify
+  mrStore.ts                MR 머지/알림 상태 영구 저장(mr-state.json): notifiedAt/notifyChecked dedup + baselineDone 플래그
+  styles.css                다크 위젯 테마(.merge-chip — 머지완료=채움, 머지오픈=점선, 클릭 가능 칩 커서/호버 포함)
 src-tauri/
   src/lib.rs                플러그인 등록, 트레이(메뉴/좌클릭), set_badge, 커맨드 등록(run())
-  src/jira.rs               reqwest로 /rest/api/3/search/jql 호출 → slim Issue 변환 (fetch_issues 커맨드). project/parent 등 중첩 필드도 받아 slim화
-  src/secrets.rs            keyring 토큰 save/has/delete + 내부 get_token
+  src/jira.rs               reqwest로 /rest/api/3/search/jql 호출 → slim Issue 변환 (fetch_issues 커맨드). project/parent 등 중첩 필드도 받아 slim화. Issue에 숫자 id 포함(dev-status용)
+  src/devstatus.rs          Jira 개발 패널(dev-status) 조회 → 이슈에 연결된 MR(fetch_dev_mrs). 인증=기존 Jira 토큰. applicationType은 byInstanceType 키로 동적 발견
+  src/gitlab.rs             GitLab REST: 단일 MR 조회(fetch_gitlab_mr, 알림용 merged_by) + 프로젝트 MR 검색(search_project_mrs, 키로 승격 MR까지, state=all로 모든 상태 반환→프론트가 분류). PRIVATE-TOKEN(keyring, base URL 키)
+  src/secrets.rs            keyring 토큰 save/has/delete + 내부 get_token. Jira(서비스 jira-today-todo, account=email)와 GitLab(서비스 jira-today-todo-gitlab, account=base URL) 분리
   tauri.conf.json           창(380×620, decorations:false), 번들, 식별자
   capabilities/default.json 프론트에서 호출하는 플러그인/창 권한
 ```
@@ -28,6 +33,12 @@ src-tauri/
 3. Rust `fetch_issues`가 keyring에서 토큰을 읽어 Jira REST 호출 → `Vec<Issue>`(camelCase) 반환.
 4. `render.ts`가 마감 기준 그룹핑/색상으로 표시. 행 클릭 → `openUrl(browseUrl)`.
    - **학교 칩**: `schoolLabel`이 `parentSummary`의 선행 `[PFO XXX]` 태그 → 프로젝트명(…대/대학교 토큰) → 프로젝트 키 순으로 학교를 추론(프론트 계산). MIMS 하위작업은 상위 제목에, SEHAN/SEWU 등 학교 전용 PFO 프로젝트는 프로젝트명에 학교가 있고, SANDBOX처럼 학교 토큰이 없으면 키(`SANDBOX`)로 표시.
+
+## GitLab MR 칩(머지완료/머지오픈)·알림
+- **흐름(하이브리드)**: `doRefresh()`가 목록을 띄운 뒤 `resolveAndRenderMerges`→`gitlab.ts resolveMerges`를 비동기로 돌린다(실패 격리: 실패해도 Jira 목록엔 영향 없음). ① `fetch_dev_mrs`로 이슈가 속한 **프로젝트 경로만** 발견(기존 Jira 토큰) → ② 그 프로젝트에서 `search_project_mrs(key)`로 키 포함 MR 전수 수집(**state=all** — opened/merged/closed 모두) → ③ `branchToEnv`(dev→DEV, prod→PROD) × `chipKindOf`(merged→머지완료, opened→머지오픈, 그 외 칩 없음)로 **환경·상태별 1칩**. 같은 (환경,상태)면 가장 최근(max iid) MR의 `web_url`을 칩이 보관 → 클릭 시 그 MR을 연다(`main.ts` #content 위임 → `openUrl`, http/https만 `isSafeMrUrl`로 통과). ④ **merged MR만** `fetch_gitlab_mr`로 merged_by 확인해 author≠merged_by면 알림(open은 알림 없음).
+- **왜 하이브리드인가**: dev-status는 MR↔이슈를 **source 브랜치명/커밋**으로만 연결 → `local→dev→prod` 승격 MR(브랜치에 키 없음)을 놓친다. GitLab 검색은 title/description을 인덱싱하므로 승격 MR까지 잡는다(팀 MR 템플릿이 제목·설명에 이슈 키/Jira 링크를 남김).
+- **칩 종류**: `DEV/PROD 머지완료`(채워진 칩) + `DEV/PROD 머지오픈`(점선 칩). open도 환경별로 구분(사용자 확정). closed/locked는 칩 없음(사용자 확정). 한 이슈에 머지완료·머지오픈이 동시에 뜰 수 있다(예: dev 머지 + prod 승격 MR이 아직 open).
+- **불변식**: ⓐ **칩·알림 모두 GitLab base URL+토큰이 있어야 동작**(검색에 토큰 필요). 미설정이면 `resolveMerges`는 빈 맵 → 칩 없음. ⓑ GitLab 호출의 project_path는 **설정 호스트와 origin이 일치하는** dev-status url에서만 추출(토큰 유출 방지). ⓒ **브랜치→환경 매핑은 `gitlabParse.ts BRANCH_ENV` 한 곳**에서만 바꾼다. ⓓ 알림 중복/과호출 방지는 `mr-state.json`(`notifiedAt`/`notifyChecked`/`baselineDone`). 첫 실행 baseline 패스는 기존 머지 MR을 알림 없이 시딩(폭증 방지). ⓔ **open MR은 절대 알림하지 않는다**(칩·클릭만). 알림 조건은 종전 그대로(merged AND author≠merged_by AND 미알림). ⓕ **칩 클릭 URL은 GitLab API의 `web_url`만**(Jira description 파싱 없음 — 정방향 방식은 폐기됨). 위험 scheme은 렌더·클릭 양쪽에서 `isSafeMrUrl`로 차단.
 
 ## 에러 처리 흐름 (F6)
 - `fetch_issues` 실패는 `doRefresh()`(main.ts)가 잡아 **`errors.ts`의 `classifyError`로 분류**한다: `network` / `auth` / `jql` / `unknown`.
@@ -47,6 +58,9 @@ src-tauri/
 ## Rust 커맨드 (invoke 대상)
 - `fetch_issues(site, email, jql) -> Vec<Issue>` — Issue엔 키/요약/마감/상태/우선순위/유형 외 `projectKey`·`projectName`·`parentSummary`도 포함(학교 칩용). 신규 검색 API는 `fields`에 `project`,`parent`를 명시해야 내려온다.
 - `save_token(email, token)` / `has_token(email) -> bool` / `delete_token(email)`
+- `save_gitlab_token(base_url, token)` / `has_gitlab_token(base_url) -> bool` / `delete_gitlab_token(base_url)` — GitLab 토큰(서비스 `jira-today-todo-gitlab`, account=base URL)
+- `fetch_dev_mrs(site, email, issue_id) -> Vec<DevMr>` — dev-status 개발 패널의 연결 MR. 인증=기존 Jira 토큰. 칩/알림 발견에서 **프로젝트 경로 발견용**으로 쓴다(승격 MR은 못 잡으므로 발견만).
+- `fetch_gitlab_mr(base_url, project_path, iid) -> GitlabMr` — 단일 MR(알림용 merged_by 포함). `search_project_mrs(base_url, project_path, key) -> Vec<SearchedMr>` — 키로 MR 검색(title/description 인덱스 → 승격 MR까지). **state=all**이라 opened/merged/closed가 모두 내려오고 `state` 필드를 포함한다(프론트 `chipKindOf`가 머지완료/머지오픈으로 분류, 그 외는 칩 없음). `SearchedMr`엔 클릭용 `webUrl` 포함. 둘 다 PRIVATE-TOKEN(keyring base URL 키). **호스트 일치할 때만 프론트가 호출**(토큰 유출 방지).
 - `set_badge(count)` — 트레이 툴팁에 미해결 건수 표시
 - `notify(title, body)` — 마감 알림 토스트. **OS별 분기**: Windows는 자체 AUMID(`appid::show_toast`, winrt)로 직접 발송, 비-Windows(macOS/Linux)는 `tauri-plugin-notification`(`NotificationExt::notification().builder()…show()`)으로 발송. 프론트는 `invoke("notify", {title, body})`만 호출하고 `AppHandle`은 Tauri가 자동 주입하므로, 커맨드에 `AppHandle` 인자를 추가해도 프론트 호출부는 그대로다. 플러그인 import(`use tauri_plugin_notification::NotificationExt;`)는 `#[cfg(not(windows))]` 블록 안에 두어 Windows 빌드에 unused 경고가 안 나게 한다.
 - 프론트→Rust 단방향 알림은 이벤트로: 트레이 메뉴가 `tray://refresh` / `tray://settings` emit, main.ts가 listen.

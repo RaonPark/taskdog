@@ -1,5 +1,7 @@
 #[cfg(windows)]
 mod appid;
+mod devstatus;
+mod gitlab;
 mod jira;
 mod secrets;
 
@@ -80,9 +82,15 @@ pub fn run() {
     builder
         .invoke_handler(tauri::generate_handler![
             jira::fetch_issues,
+            gitlab::fetch_gitlab_mr,
+            gitlab::search_project_mrs,
+            devstatus::fetch_dev_mrs,
             secrets::save_token,
             secrets::has_token,
             secrets::delete_token,
+            secrets::save_gitlab_token,
+            secrets::has_gitlab_token,
+            secrets::delete_gitlab_token,
             set_badge,
             notify
         ])
